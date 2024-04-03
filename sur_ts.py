@@ -22,15 +22,20 @@ class SimplifiedAttention(nn.Module):
         self.value = nn.Linear(embed_size, embed_size)
     
     def forward(self, q, k, v, reduce=True):
-        Q = self.query(q)
-        K = self.key(k)
-        V = self.value(v)
+        Q = F.normalize(q, p=2, dim=-1)#self.query(q)
+        K = F.normalize(k, p=2, dim=-1)#self.key(k)
+        # V = F.normalize(v, p=2, dim=-1)#self.value(v)
+        V = v
         
         # Compute the attention scores
-        attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / torch.sqrt(torch.tensor(Q.size(-1), dtype=torch.float32))
+        # attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / torch.sqrt(torch.tensor(Q.size(-1), dtype=torch.float32))
+        # attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / torch.sqrt(torch.tensor(Q.size(-1), dtype=torch.float32))
+        attention_scores = torch.matmul(Q, K.transpose(-2, -1)) 
         
         # Apply softmax to get the attention weights
-        attention_weights = F.softmax(attention_scores, dim=-1)
+        # attention_weights = F.softmax(attention_scores, dim=-1)
+        attention_weights = attention_scores
+        # print("attention_weights", attention_weights[0,:])
         
         # Compute the weighted sum of values using the attention weights
         if reduce:
@@ -38,7 +43,8 @@ class SimplifiedAttention(nn.Module):
         else:
             # print(attention_weights.shape, V.shape)
             attention_outputs = torch.einsum('bij,bjk->bikj', attention_weights, V)
-        
+        # print("attention_outputs", attention_outputs[0,:])
+
         return attention_outputs, attention_weights  # Return both weights and outputs
 
 
@@ -236,6 +242,11 @@ class SurrogateTimeSeriesTransformer(PreTrainedModel):
             distribution = self.model.output_distribution(params, loc=loc, scale=scale)
 
             sur_loss = self.loss(distribution, sur_pred)
+            # attention_output (256, 24, 32) , last_decoder_hidden_states (256, 24, 32)
+            # sim_loss = torch.mean((attention_output - last_decoder_hidden_states) ** 2, dim=-1).mean()
+            sim_loss = torch.mean(F.cosine_similarity(attention_output, last_decoder_hidden_states, dim=-1), dim=-1)
+            # print("sim_loss", sim_loss)
+            # print('attention_output', attention_output[0,0,:], 'last_hidden_state', last_decoder_hidden_states[0,0,:])
 
             if future_observed_mask is None:
                 future_observed_mask = torch.ones_like(future_values)
@@ -246,9 +257,11 @@ class SurrogateTimeSeriesTransformer(PreTrainedModel):
                 loss_weights, _ = future_observed_mask.min(dim=-1, keepdim=False)
 
             sur_loss = weighted_average(sur_loss, weights=loss_weights)
+            sim_loss = weighted_average(sim_loss, weights=loss_weights)
+            outputs['sim_loss'] = sim_loss
             outputs['sur_loss'] = sur_loss
             outputs['pred_loss'] = outputs.loss
-            outputs['loss'] = sur_loss + outputs.loss
+            outputs['loss'] =  outputs.loss + sur_loss +sim_loss
 
 
         # Add the attention output and weights to the outputs
